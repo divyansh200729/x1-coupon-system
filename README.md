@@ -1,20 +1,32 @@
-# X1 Smartech ₹1,100 laptop coupon
+# X1 Smartech coupon + staff portal
 
-Buildless HTML/CSS/JavaScript. Serve `dist` using any static host. No build or npm install required.
+Customer page: `dist/index.html`. Staff portal: `dist/admin.html`.
 
-## Preview
+## Try the local preview
 
-Without Supabase configuration the page shows a preview banner. Enter any valid Indian mobile number and code **123456**. Preview records use sessionStorage in this tab only; they are not real customer records. Return with the same number in the same tab to see its redeemed state.
+Open the customer page and admin.html in two tabs of the SAME browser on the same origin. Register a customer using OTP 123456, then open the demo admin panel. The new record appears automatically. Find the customer and press Redeem, then confirm. The customer status updates and plays the fireworks animation. Repeat redemption is disabled.
 
-## Connect Supabase
+Preview records use localStorage shared between tabs and persist after reload. Use fictional details: preview has no authentication or database security. Previous sessionStorage preview records are not migrated; register again. Different browsers/devices do not sync until Supabase is connected.
 
-1. Create a Supabase project and run `supabase/setup.sql` once in its SQL editor.
-2. Enable Phone authentication and configure an SMS provider in Authentication → Providers. Configure SMS rate limits and anti-abuse settings before a public launch. Supabase supports configured test numbers for development.
-3. Put your project URL and publishable/anon key in `dist/config.js`. Never put a service-role key in this file.
-4. Deploy `dist` to a public HTTPS static host. The initial Sites preview is owner-private and is not yet a customer-facing QR destination.
-5. Test with two mobile numbers: register, redeem, sign out, sign back in, reload and confirm the first redemption timestamp never changes. Verify that the other number keeps its own coupon. Test simultaneous redemption requests against your test project.
-6. Generate your printed QR code from the final public HTTPS page URL. Scanning it opens this registration page.
+## Live setup
 
-Live authentication uses Supabase SMS OTP. Customer name, email, consent time, mobile and redemption timestamp are stored in `coupon_customers`; inspect/export records from the Supabase dashboard. Email is collected but not verified. The database derives the mobile number from verified authentication and gives browsers no direct table access. Only authenticated users can call functions for their own record. Redemption is an atomic database update and remains used across devices.
+1. Create a Supabase project. Run `supabase/setup.sql` and THEN `supabase/admin-migration.sql` in the SQL editor. Existing installations run only admin-migration.sql. It removes the old customer redemption function.
+2. Enable Phone authentication with an SMS provider, and Email/password authentication for staff. Configure rate limits and anti-abuse settings before launch.
+3. Create a staff user in Supabase Authentication. Authorize their UUID from the SQL editor:
 
-The discount is ₹1,100 on a laptop purchase, once per mobile number. The customer presses Redeem at the store. This version does not validate a purchase or require staff approval; add that workflow if required. No expiry or minimum spend has been invented. Define your final sale terms and customer data retention policy before launch.
+```sql
+insert into public.coupon_admins(user_id) values ('STAFF-USER-UUID');
+```
+
+4. Add project URL and publishable/anon key to `dist/config.js`. Never use the service-role key in browser files.
+5. Deploy dist on a public HTTPS static host. Point the printed QR code to the customer page. Give staff the /admin.html URL.
+
+Customers can only register and view their own coupon. Staff sign in separately and the database verifies membership in coupon_admins before listing records or redeeming. Direct browser table writes are prohibited. Each redemption saves its timestamp and staff user UUID. Conditional database updates prevent repeat redemption, including concurrent requests. Customer and admin sessions use separate storage keys.
+
+Both pages poll Supabase every three seconds while visible; this is automatic near-live synchronization, not a push subscription. The admin list supports search, status filters and 25 records per page. Staff must check that the customer is present before confirming redemption. Customer fireworks play when their open page first observes the redeemed status.
+
+## Checks before launch
+
+Use two customer mobile numbers and a staff account. Check registration, staff search, redemption, page reload, cross-device sync and duplicate/concurrent redemption. Confirm a normal customer cannot call admin_list_customers or admin_redeem_coupon, and that the old redeem_laptop_coupon function no longer exists. Live database/OTP checks require your configured Supabase project.
+
+The offer is ₹1,100 off a laptop purchase, once per mobile number. A future offer reset/campaign system is not yet implemented. Define your final sale terms and data retention policy before launch. Email is collected but not verified.

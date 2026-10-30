@@ -29,21 +29,9 @@ begin
   return query select c.* from public.coupon_customers c where c.phone = v_phone and c.user_id = auth.uid();
 end;
 $$;
-create function public.redeem_laptop_coupon()
-returns setof public.coupon_customers language plpgsql security definer set search_path = '' as $$
-begin
-  -- Atomic conditional update: concurrent requests cannot redeem twice.
-  return query update public.coupon_customers c set redeemed_at = now()
-    where c.user_id = auth.uid() and c.redeemed_at is null returning c.*;
-  if not found then
-    return query select c.* from public.coupon_customers c where c.user_id = auth.uid();
-    if not found then raise exception 'Register your customer details before redeeming.'; end if;
-  end if;
-end;
-$$;
 revoke all on function public.get_my_coupon() from public, anon;
 revoke all on function public.register_coupon_customer(text,text) from public, anon;
-revoke all on function public.redeem_laptop_coupon() from public, anon;
 grant execute on function public.get_my_coupon() to authenticated;
 grant execute on function public.register_coupon_customer(text,text) to authenticated;
-grant execute on function public.redeem_laptop_coupon() to authenticated;
+
+-- REQUIRED: run admin-migration.sql next to enable staff-only redemption.
