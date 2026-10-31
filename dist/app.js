@@ -1,14 +1,15 @@
 const $ = id => document.getElementById(id);
 const config = window.X1_CONFIG || {};
-const demo = !config.supabaseUrl || !config.supabaseAnonKey;
-let client, customer, pending, busy = false;
+const configured = Boolean(config.supabaseUrl && config.supabaseAnonKey);
+let client, customer, busy = false, returning = false;
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let currentScreen = 'register';
-const show = screen => {
+const show = (screen, recordHistory = true) => {
   const backwards = screen === 'register';
   const previous = currentScreen;
+  if (recordHistory && previous !== screen) history.pushState({screen}, '', location.href);
   currentScreen = screen;
-  ['register','verify','coupon'].forEach(id => $(id).hidden = id !== screen);
+  ['register','coupon'].forEach(id => $(id).hidden = id !== screen);
   if (previous !== screen && !reducedMotion()) {
     $(screen).getAnimations().forEach(animation => animation.cancel());
     $(screen).animate([
@@ -38,10 +39,10 @@ function addSwipe(element, direction, action) {
     const dy = event.changedTouches[0].clientY-start.y;
     const quick = Date.now()-start.time < 650;
     start = null;
-    if (quick && (direction === 'right' ? dx > 85 && Math.abs(dy) < 40 : dy > 90 && Math.abs(dx) < 45)) action();
+    if (quick && (direction === 'right' ? dx > 85 && Math.abs(dy) < 40 : dx < -85 && Math.abs(dy) < 40)) action();
   }, {passive:true});
 }
-addSwipe($('verify'), 'right', () => { if (!busy) $('back').click(); });
+
 const message = text => $('message').textContent = text;
 function celebrateRedemption() {
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -76,10 +77,9 @@ async function run(action) {
   try { await action(); } catch(error) { message(error.message || 'Something went wrong. Please try again.'); }
   finally { busy = false; document.querySelectorAll('button').forEach(b => b.disabled = false); }
 }
-function render() {
-  show('coupon');
-  const greetingName = customer.name.trim();
-  $('greeting').textContent = `Hi, ${greetingName.charAt(0).toLocaleUpperCase('en-IN')}${greetingName.slice(1)}!`;
+function render(recordHistory = true) {
+  show('coupon', recordHistory);
+  $('greeting').textContent = 'Your laptop coupon';
   $('coupon-phone').textContent = `LINKED TO ${customer.phone}`;
   const used = Boolean(customer.redeemed_at);
   $('status').textContent = used ? `✓ Redeemed on ${new Date(customer.redeemed_at).toLocaleString('en-IN')}` : '✦ Ready to redeem';
@@ -90,42 +90,56 @@ async function rpc(name, args = {}) {
   if(error) throw error;
   return Array.isArray(data) ? data[0] : data;
 }
-const readDemo = () => JSON.parse(localStorage.getItem('x1-preview-records') || '{}');
-function saveDemo() { const records = readDemo(); records[customer.phone] = customer; localStorage.setItem('x1-preview-records',JSON.stringify(records)); }
-$('details-form').addEventListener('submit', event => {event.preventDefault(); run(async () => {
-  pending = {name:$('name').value.trim(),phone:'+91'+$('phone').value.trim(),email:$('email').value.trim()};
-  if(pending.name.length < 2) throw Error('Please enter your full name.');
-  if(!demo) { const {error} = await client.auth.signInWithOtp({phone:pending.phone}); if(error) throw error; }
-  $('otp-description').textContent = demo ? 'Preview only: enter 123456 to try the coupon flow. No SMS is sent.' : `Enter the 6-digit SMS code sent to ${pending.phone}.`;
-  show('verify'); $('otp').focus();
-});});
-$('otp-form').addEventListener('submit', event => {event.preventDefault(); run(async () => {
-  if(demo) {
-    if($('otp').value !== '123456') throw Error('For this preview, use code 123456.');
-    customer = readDemo()[pending.phone] || {...pending, redeemed_at:null,created_at:new Date().toISOString()}; saveDemo();
-  } else {
-    const {error} = await client.auth.verifyOtp({phone:pending.phone,token:$('otp').value,type:'sms'}); if(error) throw error;
-    customer = await rpc('register_coupon_customer',{p_name:pending.name,p_email:pending.email});
+$('login-toggle').onclick = () => {
+  returning = !returning;
+  for (const id of ['name', 'email']) {
+    $(id).required = !returning;
+    $(id).hidden = returning;
+    document.querySelector(`label[for="${id}"]`).hidden = returning;
   }
-  $('otp').value = ''; render();
+  $('registration-consent').hidden = returning;
+  $('consent').required = !returning;
+  $('continue').textContent = returning ? 'View my coupon →' : 'Get my ₹1,100 coupon →';
+  $('login-toggle').textContent = returning ? 'New customer? Register here' : 'Already registered? Use your mobile number';
+  message('');
+};
+$('details-form').addEventListener('submit', event => {event.preventDefault(); run(async () => {
+  const phone = '+91' + $('phone').value.trim();
+  if(!/^\+91[6-9][0-9]{9}$/.test(phone)) throw Error('Enter a valid 10-digit Indian mobile number.');
+  const name = $('name').value.trim(), email = $('email').value.trim();
+  if(!returning && name.length < 2) throw Error('Please enter your full name.');
+  if(!client) throw Error(configured ? 'The coupon service is still connecting. Please try again.' : 'Registration is unavailable until the store connects its customer database.');
+  customer = returning ? await rpc('lookup_coupon_by_mobile',{p_phone:phone}) : await rpc('register_coupon_by_mobile',{p_phone:phone,p_name:name,p_email:email});
+  if(!customer) throw Error('No coupon found for this number. Please register first.');
+  sessionStorage.setItem('x1-customer-phone',phone); $('view-coupon').hidden=false; render();
 });});
-$('back').onclick = () => { show('register'); message(''); $('otp').value=''; };
-let resendAt = 0;
-$('resend').onclick = () => run(async () => {
-  if(Date.now() < resendAt) throw Error('Please wait a minute before requesting another code.');
-  if(!demo) { const {error} = await client.auth.signInWithOtp({phone:pending.phone}); if(error) throw error; }
-  resendAt = Date.now()+60000; message(demo ? 'Preview code: 123456. No SMS was sent.' : 'A new verification code has been sent.');
+$('logout').onclick = () => run(async () => {
+  sessionStorage.removeItem('x1-customer-phone'); customer = null; $('view-coupon').hidden=true; $('details-form').reset(); show('register');
 });
-$('logout').onclick = () => run(async () => { if(!demo) {const {error} = await client.auth.signOut(); if(error) throw error;} customer = null; pending = null; $('details-form').reset(); show('register'); });
+history.replaceState({screen:'register'}, '', location.href);
+window.addEventListener('popstate', event => {
+  if(busy) return;
+  if(event.state?.screen === 'coupon' && customer) render(false);
+  else show('register', false);
+});
+const backToDetails = () => { if(!busy && currentScreen === 'coupon') history.back(); };
+const forwardToCoupon = () => { if(!busy && customer && currentScreen === 'register') render(); };
+$('customer-back').onclick = backToDetails;
+$('view-coupon').onclick = forwardToCoupon;
+addSwipe($('coupon'), 'right', backToDetails);
+addSwipe($('register'), 'left', forwardToCoupon);
 async function init() {
-  $('demo-badge').hidden = !demo;
-  if(demo) return;
+  if(!configured) {
+    message('Registration is unavailable until the store connects its customer database.');
+    $('continue').disabled = true;
+    return;
+  }
   try {
     const {createClient} = await import('https://esm.sh/@supabase/supabase-js@2');
-    client = createClient(config.supabaseUrl,config.supabaseAnonKey,{auth:{storageKey:"x1-customer-auth"}});
-    const {data,error} = await client.auth.getSession(); if(error) throw error;
-    if(data.session) { customer = await rpc('get_my_coupon'); if(customer) render(); }
-  } catch(error) { message('Could not connect to the coupon service. Please reload or contact X1 Smartech.'); document.querySelectorAll('button').forEach(b=>b.disabled=true); }
+    client = createClient(config.supabaseUrl,config.supabaseAnonKey,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+    const phone = sessionStorage.getItem('x1-customer-phone');
+    if(phone) { customer = await rpc('lookup_coupon_by_mobile',{p_phone:phone}); if(customer) { $('view-coupon').hidden=false; render(); } }
+  } catch(error) { message(`Could not connect to the coupon service: ${error.message || 'Please reload.'}`); }
 }
 init();
 
@@ -134,12 +148,14 @@ let refreshing = false;
 async function refreshCoupon() {
  if (!customer || busy || refreshing || document.hidden) return;
  refreshing = true;
+ const phone = customer.phone;
  try {
-  const next = demo ? readDemo()[customer.phone] : await rpc('get_my_coupon');
-  if (next) { const newlyRedeemed = !customer.redeemed_at && next.redeemed_at; customer = next; render(); if(newlyRedeemed) { celebrateRedemption(); message('Your coupon was redeemed by X1 Smartech. Enjoy your ₹1,100 saving!'); } }
+  const next = await rpc('lookup_coupon_by_mobile',{p_phone:phone});
+  if(!customer || customer.phone !== phone) return;
+  if (next) { const newlyRedeemed = !customer.redeemed_at && next.redeemed_at; customer = next; if(currentScreen === 'coupon') render(); if(newlyRedeemed) { celebrateRedemption(); message('Your coupon was redeemed by X1 Smartech. Enjoy your ₹1,100 saving!'); } }
  } catch { message('Status could not refresh. Retrying automatically.'); }
  finally { refreshing = false; }
 }
 setInterval(refreshCoupon,3000);
-window.addEventListener('storage',event=>{if(event.key==='x1-preview-records') refreshCoupon();});
+
 document.addEventListener('visibilitychange',()=>{if(!document.hidden) refreshCoupon();});

@@ -1,0 +1,23 @@
+const {readFileSync}=require('node:fs');
+const vm=require('node:vm');
+const assert=require('node:assert/strict');
+const elements=new Map();
+const el=id=>{if(!elements.has(id)) elements.set(id,{value:'',hidden:false,disabled:false,textContent:'',events:{},addEventListener(k,f){this.events[k]=f},querySelector(){return el('heading')},focus(){},reset(){},getBoundingClientRect(){return {top:1}}});return elements.get(id)};
+const calls=[];const events={};const storage=new Map();let tick;
+const context={console,document:{hidden:false,getElementById:el,querySelector:el,querySelectorAll:()=>[],addEventListener(k,f){events[k]=f}},window:{X1_CONFIG:{supabaseUrl:'https://example.test',supabaseAnonKey:'public-test'},matchMedia:()=>({matches:true}),addEventListener(k,f){events[k]=f}},history:{replaceState(){},pushState(){},back(){events.popstate({state:{screen:'register'}})}},location:{href:'https://example.test'},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},setInterval(f,ms){if(ms===3000)tick=f},setTimeout,createClient:()=>({rpc:async(name,args)=>{calls.push({name,args});return {data:[{phone:args.p_phone,redeemed_at:null}],error:null}}})};
+let source=readFileSync('dist/app.js','utf8').replace("const {createClient} = await import('https://esm.sh/@supabase/supabase-js@2');",'');
+vm.createContext(context);vm.runInContext(source,context);
+const flush=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+await flush();el('name').value='Test Customer';el('email').value='test@example.com';el('phone').value='9876543210';
+el('details-form').events.submit({preventDefault(){}});await flush();
+assert.equal(calls[0].name,'register_coupon_by_mobile');assert.equal(calls[0].args.p_phone,'+919876543210');assert.equal(el('coupon').hidden,false);
+el('customer-back').onclick();assert.equal(el('register').hidden,false);
+await tick();assert.equal(el('register').hidden,false,'polling must not undo back navigation');
+const touch=(id,start,end)=>{el(id).events.touchstart({touches:[{clientX:start,clientY:100}],target:{closest:()=>null}});el(id).events.touchend({changedTouches:[{clientX:end,clientY:100}]})};
+touch('register',220,100);assert.equal(el('coupon').hidden,false);
+touch('coupon',100,220);assert.equal(el('register').hidden,false);
+el('login-toggle').onclick();el('details-form').events.submit({preventDefault(){}});await flush();assert.equal(calls.at(-1).name,'lookup_coupon_by_mobile');
+el('logout').onclick();await flush();touch('register',220,100);assert.equal(el('register').hidden,false);assert.equal(storage.size,0);
+console.log('PASS: registration RPC, mobile lookup, swipe back/forward, polling and logout');
+})().catch(e=>{console.error(e);process.exitCode=1});
